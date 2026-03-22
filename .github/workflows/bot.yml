@@ -1,0 +1,40 @@
+name: Codzienny Bot Skarbowy
+
+on:
+  schedule:
+    - cron: "0 7 * * *" # 07:00 UTC, czyli 08:00 lub 09:00 rano w Polsce
+  workflow_dispatch: # Pozwala odpalać skrypt ręcznie z GitHuba
+
+permissions:
+  contents: write
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pobieranie repozytorium
+        uses: actions/checkout@v4
+
+      - name: Instalacja Pythona
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalacja bibliotek
+        run: pip install -r requirements.txt
+
+      - name: Uruchomienie Bota
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+        run: python main.py
+
+      - name: Zapisywanie historii linków
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add historia_linkow.txt okazje_licytacje.csv || true
+          git commit -m "Zaktualizowano bazę ofert" || echo "Brak nowych danych"
+          git push
