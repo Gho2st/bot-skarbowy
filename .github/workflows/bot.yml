@@ -2,7 +2,7 @@ name: Codzienny Bot Skarbowy
 
 on:
   schedule:
-    - cron: "0 7 * * *" # 07:00 UTC, czyli 08:00 lub 09:00 rano w Polsce
+    - cron: "0 6 * * *" # 07:00 UTC, czyli 08:00 lub 09:00 rano w Polsce
   workflow_dispatch: # Pozwala odpalać skrypt ręcznie z GitHuba
 
 permissions:
