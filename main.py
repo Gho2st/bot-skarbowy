@@ -148,18 +148,27 @@ def wyslij_email(lista_znalezionych):
         )
         return
 
-    temat = f"🔥 Bot znalazł {len(lista_znalezionych)} nowe okazje skarbowe!"
-
-    tresc = "<h3>Dzisiejsze okazje poniżej 50% wartości:</h3><ul>"
-    for okazja in lista_znalezionych:
-        tresc += f"""
-        <li style="margin-bottom: 10px;">
-            <b>Oszacowano:</b> {okazja["szacunkowa"]} zł | <b>Wywoławcza:</b> {okazja["wywolawcza"]} zł<br>
-            <b>Opłacalność:</b> <span style="color: green; font-weight: bold;">{okazja["procent"]}% wartości</span><br>
-            🔗 <a href="{okazja["link"]}">Przejdź do ogłoszenia</a>
-        </li>
+    # Ustawianie tematu i treści w zależności od tego, czy coś znaleziono
+    if len(lista_znalezionych) > 0:
+        temat = f"🔥 Bot znalazł {len(lista_znalezionych)} nowe okazje skarbowe!"
+        tresc = "<h3>Dzisiejsze okazje poniżej 50% wartości:</h3><ul>"
+        for okazja in lista_znalezionych:
+            tresc += f"""
+            <li style="margin-bottom: 10px;">
+                <b>Oszacowano:</b> {okazja["szacunkowa"]} zł | <b>Wywoławcza:</b> {okazja["wywolawcza"]} zł<br>
+                <b>Opłacalność:</b> <span style="color: green; font-weight: bold;">{okazja["procent"]}% wartości</span><br>
+                🔗 <a href="{okazja["link"]}">Przejdź do ogłoszenia</a>
+            </li>
+            """
+        tresc += "</ul><br><small>Wiadomość wygenerowana automatycznie przez Twojego bota 🤖</small>"
+    else:
+        temat = "🤷‍♂️ Dzisiaj brak nowych okazji skarbowych"
+        tresc = """
+        <h3>Brak ofert poniżej 50% wartości</h3>
+        <p>Bot przeanalizował ogłoszenia, ale dzisiaj nie wpadło nic nowego w dobrej cenie.</p>
+        <p>Szukamy dalej jutro!</p>
+        <br><small>Wiadomość wygenerowana automatycznie przez Twojego bota 🤖</small>
         """
-    tresc += "</ul><br><small>Wiadomość wygenerowana automatycznie przez Twojego bota 🤖</small>"
 
     msg = MIMEMultipart()
     msg["From"] = EMAIL_SENDER
@@ -317,13 +326,13 @@ def uruchom_bota():
             print(f"  🛑 BŁĄD: {e}")
             print("-" * 60)
 
-    # Po przeanalizowaniu wszystkich linków sprawdzamy, czy trzeba wysłać maila
-    if len(znalezione_dzisiaj) > 0:
-        wyslij_email(znalezione_dzisiaj)
-    else:
+    # Po przeanalizowaniu wszystkich linków wysyłamy maila zawsze (raport z pracy)
+    if len(znalezione_dzisiaj) == 0:
         print(
-            "🤷‍♂️ Dzisiaj nie znaleziono żadnych nowych okazji (poniżej 50%). E-mail nie zostanie wysłany."
+            "🤷‍♂️ Dzisiaj nie znaleziono żadnych nowych okazji. Wysyłam maila z powiadomieniem o pustym przebiegu."
         )
+
+    wyslij_email(znalezione_dzisiaj)
 
 
 if __name__ == "__main__":
