@@ -393,6 +393,8 @@ def uruchom_bota():
     linki_zrodlowe = soup.find_all(
         "a", string=re.compile("Zobacz zrodlo|Zobacz źródło", re.IGNORECASE)
     )
+    # --- DODAJ TĘ LINIJKĘ, ABY OGRANICZYĆ DO 10 LINKÓW ---
+    linki_zrodlowe = linki_zrodlowe[:10]
     liczba_ofert = len(linki_zrodlowe)
     znalezione_dzisiaj = []
 
