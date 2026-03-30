@@ -25,7 +25,9 @@ from email.mime.multipart import MIMEMultipart
 API_KEY = os.environ.get("GEMINI_API_KEY")
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
-EMAIL_RECEIVER_RAW = os.environ.get("EMAIL_RECEIVER", "")
+# EMAIL_RECEIVER_RAW = os.environ.get("EMAIL_RECEIVER", "")
+EMAIL_RECEIVER_RAW = os.environ.get("EMAIL_RECEIVER_TEST", "")
+
 
 # Obsługa wielu maili
 EMAIL_RECEIVERS = (
