@@ -1,0 +1,16 @@
+# Pliki generowane przez bota
+historia_linkow.txt
+okazje_licytacje.csv
+
+# Zmienne środowiskowe (jeśli testujesz lokalnie z plikiem .env)
+.env
+
+# Pliki tymczasowe Pythona
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Środowisko wirtualne (jeśli używasz)
+venv/
+env/
