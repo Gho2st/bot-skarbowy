@@ -1,80 +1,59 @@
-# 🚗 Bot Skarbowy – Automatyczny Łowca Okazji Licytacyjnych
+# Bot Skarbowy
 
-**Inteligentny bot monitorujący aukcje Skarbu Państwa** w poszukiwaniu samochodów i pojazdów w atrakcyjnych cenach.
+Codziennie sprawdza pojazdy na portalu [eLicytacje KAS](https://elicytacje.mf.gov.pl) (licytacje i sprzedaż z wolnej ręki prowadzone przez urzędy skarbowe) i wysyła maila z okazjami.
 
-Bot codziennie skanuje oficjalny portal **eLicytacje KAS** (`elicytacje.mf.gov.pl`) przez jego publiczne API JSON, filtruje tylko najlepsze okazje i wysyła powiadomienia e-mail.
+## Jak działa
 
----
+1. Rano uruchamia go GitHub Actions (`.github/workflows/bot.yml`).
+2. Pobiera z publicznego API portalu wszystkie aktywne ogłoszenia z kategorii **Pojazdy**. Nie potrzebuje do tego klucza.
+3. Dla każdego nowego ogłoszenia czyta cenę, urzędową wartość szacunkową, markę, model, rok, przebieg, miasto i datę sprzedaży.
+4. Porównuje aktualną cenę z wartością szacunkową. Jeśli licytacja trwa, za aktualną cenę bierze najwyższą ofertę.
+5. Dla okazji liczy odległość od Krakowa (OpenStreetMap), zapisuje je do CSV i wysyła maila.
 
-## 🎯 O projekcie
+## Kryteria okazji
 
-Bot Skarbowy automatyzuje proces polowania na okazje na licytacjach komorniczych i Skarbu Państwa. Zamiast ręcznego przeglądania setek ogłoszeń dziennie – dostajesz tylko te, gdzie cena wywoławcza jest **≤ 50% wartości rynkowej** lub jest to sprzedaż z wolnej ręki.
+Cena wywołania wynika z ustawy: I licytacja to 75%, a II licytacja to 50% wartości szacunkowej. Wolna ręka zwykle wychodzi 10–40%.
 
-Projekt łączy **web scraping**, **AI parsing**, **geolokalizację** oraz **automatyczne powiadomienia** – idealne rozwiązanie pokazujące praktyczne zastosowanie AI w realnym biznesie / inwestycjach.
+| Stała w `main.py` | Domyślnie | Znaczenie |
+|---|---|---|
+| `PROG_LICYTACJA` | 50 | maksymalny % wartości dla licytacji (w praktyce: II licytacje) |
+| `PROG_WOLNA_REKA` | 40 | maksymalny % wartości dla sprzedaży z wolnej ręki |
+| `MIN_WARTOSC` | 3000 | pomija pojazdy tańsze niż ta kwota |
 
-**Aktualny status:** Działa produkcyjnie (uruchamiany automatycznie przez GitHub Actions).
+## Pliki
 
----
+| Plik | Zawartość |
+|---|---|
+| `main.py` | cały bot |
+| `historia_linkow.txt` | sprawdzone ogłoszenia; dzięki niej bot nie przysyła tego samego dwa razy |
+| `okazje_licytacje.csv` | znalezione okazje (separator `;`, do otwarcia w Excelu) |
 
-## ✨ Główne funkcjonalności
+Po każdym uruchomieniu workflow commituje oba pliki z danymi do repo.
 
-- **Zaawansowane parsowanie AI** – Google Gemini wyciąga markę, model, cenę wywoławczą, szacowaną wartość i lokalizację z PDF-ów i stron HTML
-- **Inteligentne filtrowanie** – tylko okazje ≤ 50% wartości lub "sprzedaż z wolnej ręki"
-- **Kalkulator odległości** – automatyczne obliczanie dystansu do Krakowa (lub innej lokalizacji)
-- **Historia i deduplikacja** – zapamiętuje sprawdzone linki (`historia_linkow.txt`), oszczędza tokeny API
-- **Powiadomienia e-mail** – bogaty HTML z podsumowaniem + informacja "brak nowych okazji dzisiaj"
-- **Eksport do CSV** – wszystkie znalezione okazje zapisywane do `okazje_licytacje.csv`
-- **CI/CD** – automatyczne uruchamianie codziennie przez GitHub Actions
+## Konfiguracja
 
----
+W repo: **Settings → Secrets and variables → Actions** dodaj:
 
-## 🛠 Technologie
+| Sekret | Opis |
+|---|---|
+| `EMAIL_SENDER` | adres Gmail, z którego idzie mail |
+| `EMAIL_PASSWORD` | [hasło aplikacji](https://myaccount.google.com/apppasswords) Google, nie zwykłe hasło |
+| `EMAIL_RECEIVER` | odbiorca; kilka adresów oddziel przecinkiem |
 
-| Warstwa               | Technologia                          |
-|-----------------------|--------------------------------------|
-| **Język**             | Python 3                            |
-| **AI / LLM**          | Google Gemini (gemini-1.5-flash)    |
-| **Scraping**          | requests + BeautifulSoup4           |
-| **Dokumenty**         | Obsługa PDF i DOCX                  |
-| **Geolokalizacja**    | Google Maps API / lokalna logika    |
-| **Automatyzacja**     | GitHub Actions (daily workflow)     |
-| **Powiadomienia**     | SMTP + HTML e-mail                  |
-| **Inne**              | pandas (CSV), dotenv                |
+Harmonogram: `cron: "0 6 * * *"`, czyli 6:00 UTC (7:00 zimą, 8:00 latem w Polsce). Ręczne uruchomienie: **Actions → Codzienny Bot Skarbowy → Run workflow**.
 
----
-
-## 📈 Potencjał projektu (dla rekruterów)
-
-Ten projekt doskonale pokazuje, że potrafię:
-
-- Tworzyć **praktyczne aplikacje AI** z realnym business value
-- Pracować z **nieustrukturyzowanymi danymi** (LLM parsing PDF/HTML)
-- Budować **odporne scrapery** z mechanizmami deduplikacji i oszczędzania kosztów API
-- Implementować **end-to-end automatyzację** (scraping → AI → decyzja → powiadomienie)
-- Używać GitHub Actions do CI/CD i codziennego uruchamiania
-- Łączyć różne technologie (web, AI, e-mail, geolokalizacja)
-
-To nie jest proste "hello world" – to działający tool, który realnie może generować oszczędności lub zyski przy inwestycjach w pojazdy z licytacji.
-
----
-
-## 🚀 Jak uruchomić lokalnie
+## Uruchomienie lokalne
 
 ```bash
-# 1. Sklonuj repozytorium
-git clone https://github.com/Gho2st/bot-skarbowy.git
-cd bot-skarbowy
-
-# 2. Zainstaluj zależności
 pip install -r requirements.txt
-
-# 3. Skonfiguruj zmienne środowiskowe
-cp .env.example .env
-# uzupełnij:
-# GEMINI_API_KEY=...
-# EMAIL_SENDER=...
-# EMAIL_PASSWORD=...
-# EMAIL_RECEIVER=...
-
-# 4. Uruchom bota
+export EMAIL_SENDER=... EMAIL_PASSWORD=... EMAIL_RECEIVER=...
 python main.py
+```
+
+Bez zmiennych e-mail bot działa normalnie, tylko nie wysyła maila.
+
+## Uwagi
+
+- Kupione przedmioty trzeba odebrać osobiście w urzędzie; wysyłki na razie nie ma.
+- Do udziału potrzebne są konto na portalu (login.gov.pl) i zgoda na e-korespondencję w e-Urzędzie Skarbowym. Wadium musi wpłynąć najpóźniej 2 dni robocze przed licytacją.
+- API portalu jest nieoficjalne (to samo, z którego korzysta strona), więc może się zmienić bez zapowiedzi.
