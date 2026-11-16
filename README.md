@@ -2,7 +2,7 @@
 
 **Inteligentny bot monitorujący aukcje Skarbu Państwa** w poszukiwaniu samochodów i pojazdów w atrakcyjnych cenach.
 
-Bot codziennie skanuje portal `skarbowe-licytacje.com`, analizuje za pomocą **Google Gemini AI** nieustrukturyzowane dane (HTML, PDF, DOCX), filtruje tylko najlepsze okazje i wysyła powiadomienia e-mail.
+Bot codziennie skanuje oficjalny portal **eLicytacje KAS** (`elicytacje.mf.gov.pl`) przez jego publiczne API JSON, filtruje tylko najlepsze okazje i wysyła powiadomienia e-mail.
 
 ---
 
