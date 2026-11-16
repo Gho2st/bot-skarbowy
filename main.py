@@ -1,28 +1,18 @@
 import requests
-from bs4 import BeautifulSoup
-from google import genai
-from google.genai import types
-import json
-import re
 import os
-import tempfile
 import csv
 import time
 import math
-import zipfile
-import xml.etree.ElementTree as ET
-import io
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import urllib.parse
-from urllib.parse import urljoin
 
 # Biblioteki do wysyłania maili
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-# BEZPIECZNE POBIERANIE KLUCZY I HASEŁ Z GITHUB SECRETS
-API_KEY = os.environ.get("GEMINI_API_KEY")
+# BEZPIECZNE POBIERANIE HASEŁ Z GITHUB SECRETS
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
 EMAIL_RECEIVER_RAW = os.environ.get("EMAIL_RECEIVER", "")
@@ -36,16 +26,30 @@ EMAIL_RECEIVERS = (
 )
 
 print("⚙️ Inicjalizacja bota...")
-if API_KEY:
-    client = genai.Client(api_key=API_KEY)
-    print("✅ Klucz API Gemini został załadowany.")
-else:
-    print("⚠️ Brak klucza API Gemini. Ustaw zmienną środowiskową GEMINI_API_KEY.")
-    client = None
 
-URL_GLOWNE = "https://skarbowe-licytacje.com/?q=&region=&category=pojazdy&city=&source="
+# --- PORTAL eLicytacje KAS (elicytacje.mf.gov.pl) ---
+# Portal to aplikacja Angular, która pobiera dane z publicznego API JSON.
+# Dzięki temu nie trzeba już parsować PDF-ów przez AI – ceny i wartości są w polach.
+BASE_URL = "https://elicytacje.mf.gov.pl/auction"
+API_URL = f"{BASE_URL}/api/v1"
+SEKCJA_RUCHOMOSCI = "3e026ac1-291f-4898-9229-61d1074fcfe5"
+KATEGORIA_POJAZDY = "f833e4c3-2fd9-4585-87a4-4b2a896cb86f"
+# Stany ogłoszeń, które jeszcze mają sens (reszta: SOLD, UNSOLD, CLOSED, CANCELED, VOID)
+AKTYWNE_STANY = {"WAITING", "INPROGRESS"}
+PROG_OKAZJI = 50.0  # cena wywołania <= tylu % wartości szacunkowej
+ROZMIAR_STRONY = 200
+
 PLIK_WYNIKOW = "okazje_licytacje.csv"
 PLIK_HISTORII = "historia_linkow.txt"
+STREFA_PL = ZoneInfo("Europe/Warsaw")
+
+SESJA = requests.Session()
+SESJA.headers.update(
+    {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) BotSkarbowy/2.0",
+        "Accept": "application/json",
+    }
+)
 
 # --- WSPÓŁRZĘDNE KRAKOWA ---
 KRAKOW_LAT = 50.06143
@@ -146,7 +150,7 @@ def zapisz_okazje(
                     "Data licytacji",
                 ]
             )
-        teraz = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        teraz = datetime.now(STREFA_PL).strftime("%Y-%m-%d %H:%M:%S")
         typ_oferty = "Wolna ręka" if wolna_reka else "Licytacja"
         writer.writerow(
             [
@@ -165,124 +169,6 @@ def zapisz_okazje(
     print(f"   💾 Zapisano okazję do pliku CSV: {nazwa}")
 
 
-def wyciagnij_tekst_z_docx(docx_bytes):
-    try:
-        with zipfile.ZipFile(io.BytesIO(docx_bytes)) as docx_zip:
-            xml_content = docx_zip.read("word/document.xml")
-            tree = ET.XML(xml_content)
-            NAMESPACE = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
-            tekst = []
-            for paragraph in tree.iter(NAMESPACE + "p"):
-                texts = [
-                    node.text for node in paragraph.iter(NAMESPACE + "t") if node.text
-                ]
-                if texts:
-                    tekst.append("".join(texts))
-            print("   ✅ Pomyślnie wyciągnięto tekst z pliku DOCX.")
-            return "\n".join(tekst)
-    except Exception as e:
-        print(f"   🛑 Błąd odczytu DOCX: {e}")
-        return ""
-
-
-def zapytaj_ai_o_ceny_z_tekstu(tekst):
-    if not tekst or len(tekst) < 50:
-        print("   ⚠️ Tekst jest zbyt krótki do analizy, pomijam.")
-        return []
-
-    print("   🧠 Wysyłam tekst do analizy przez Gemini AI...")
-    prompt = f"""
-    Przeanalizuj poniższy tekst obwieszczenia urzędowego.
-    Znajdź pojazdy i dla KAŻDEGO z nich podaj 6 informacji:
-    1. "szacunkowa" - Wartość szacunkowa (liczba)
-    2. "wywolawcza" - Cena wywoławcza (liczba)
-    3. "nazwa" - Nazwa pojazdu (marka i model)
-    4. "miasto" - Miasto (miejscowość licytacji/urzędu)
-    5. "wolna_reka" - Czy jest to sprzedaż z wolnej ręki? (true/false)
-    6. "data_licytacji" - Data i godzina licytacji w ścisłym formacie "YYYY-MM-DD HH:MM" (np. 2024-05-12 10:00). Jeśli jest podany tylko dzień, dopisz godzinę "08:00".
-
-    WAŻNE: Jeśli to "sprzedaż z wolnej ręki" i jest JEDNA kwota, wstaw ją jako OBIEDWIE wartości cenowe.
-    Jeśli którejś informacji brakuje, wstaw null.
-    
-    Tekst:
-    {tekst[:6000]} 
-    """
-    try:
-        response = client.models.generate_content(
-            model="gemini-3.1-flash-lite",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-            ),
-        )
-        dane = json.loads(response.text)
-        print("   ✅ Otrzymano odpowiedź JSON od modelu AI.")
-        if isinstance(dane, dict):
-            return [dane]
-        elif isinstance(dane, list):
-            return dane
-        return []
-    except Exception as e:
-        if "429" in str(e):
-            print("   ⏳ Limit API Google (Tekst). Czekam 45 sekund...")
-            time.sleep(45)
-        else:
-            print(f"   🤖 Błąd API (Tekst): {e}")
-        return []
-
-
-def przeanalizuj_pdf_z_ai(pdf_bytes):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_pdf:
-        temp_pdf.write(pdf_bytes)
-        temp_pdf_path = temp_pdf.name
-
-    try:
-        print("   📤 Przesyłam dokument PDF do File API Gemini...")
-        wgrany_plik = client.files.upload(file=temp_pdf_path)
-        print("   🧠 Wysyłam plik PDF do analizy wizualnej przez AI...")
-
-        prompt = """
-        Przeczytaj dokładnie ten dokument i znajdź pojazdy. Dla KAŻDEGO pojazdu podaj 6 informacji:
-        1. "szacunkowa" - Wartość szacunkowa (liczba)
-        2. "wywolawcza" - Cena wywoławcza (liczba)
-        3. "nazwa" - Nazwa pojazdu (marka i model)
-        4. "miasto" - Miasto (miejscowość prowadzenia licytacji)
-        5. "wolna_reka" - Czy jest to sprzedaż z wolnej ręki? (true/false)
-        6. "data_licytacji" - Data i godzina licytacji w ścisłym formacie "YYYY-MM-DD HH:MM" (np. 2024-05-12 10:00). Jeśli jest podana tylko data, dopisz godzinę "08:00".
-        
-        WAŻNE: Jeśli to "sprzedaż z wolnej ręki" i podana jest tylko jedna kwota, przypisz ją do OBU pól cenowych.
-        Jeśli którejś informacji brakuje, wstaw null.
-        """
-
-        response = client.models.generate_content(
-            model="gemini-3.1-flash-lite-preview",
-            contents=[wgrany_plik, prompt],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-            ),
-        )
-        print("   🗑️ Usuwam przetworzony plik z chmury Gemini...")
-        client.files.delete(name=wgrany_plik.name)
-
-        dane = json.loads(response.text)
-        print("   ✅ Pomyślnie przetworzono odpowiedź AI z pliku PDF.")
-        if isinstance(dane, dict):
-            return [dane]
-        elif isinstance(dane, list):
-            return dane
-        return []
-    except Exception as e:
-        if "429" in str(e):
-            print("   ⏳ Limit API w PDF. Czekam 45 sekund...")
-            time.sleep(45)
-        else:
-            print(f"   🤖 Błąd API (PDF): {e}")
-        return []
-    finally:
-        if os.path.exists(temp_pdf_path):
-            os.remove(temp_pdf_path)
-
-
 def wyslij_email(lista_znalezionych):
     if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVERS:
         print("⚠️ Brak pełnych danych e-mail. Pomijam wysyłanie.")
@@ -295,7 +181,7 @@ def wyslij_email(lista_znalezionych):
     )
 
     temat = f"🔥 Bot znalazł {len(lista_znalezionych)} nowe okazje skarbowe!"
-    teraz = datetime.now()
+    teraz = datetime.now(STREFA_PL).replace(tzinfo=None)
 
     tresc = "<h3>Dzisiejsze okazje (poniżej 50% wartości LUB z wolnej ręki):</h3><ul>"
     for okazja in lista_znalezionych:
@@ -328,7 +214,7 @@ def wyslij_email(lista_znalezionych):
                 data_koniec = (data_lic + timedelta(hours=2)).strftime("%Y%m%dT%H%M%S")
                 tytul = urllib.parse.quote(f"Licytacja US: {okazja['nazwa']}")
                 opis = urllib.parse.quote(
-                    f"Szczegóły licytacji:\nCena wywoławcza: {okazja['wywolawcza']} zł\nLink do obwieszczenia: {okazja['link']}"
+                    f"Szczegóły licytacji:\nCena wywoławcza: {okazja['wywolawcza']} zł\nLink do ogłoszenia: {okazja['link']}"
                 )
                 lokalizacja = urllib.parse.quote(okazja["miasto"] or "Polska")
 
@@ -406,247 +292,168 @@ def wyslij_email_brak_okazji():
         print(f"❌ Błąd podczas wysyłania e-maila (brak okazji): {e}")
 
 
-def uruchom_bota():
-    if not API_KEY:
-        print("🛑 Zatrzymuję bota - brak klucza API.")
-        return
+def api_get(sciezka):
+    odp = SESJA.get(f"{API_URL}{sciezka}", timeout=20)
+    odp.raise_for_status()
+    return odp.json()
 
+
+def pobierz_liste_pojazdow():
+    """Pobiera wszystkie ogłoszenia z kategorii Pojazdy (strona po stronie)."""
+    wszystkie = []
+    strona = 0
+    while True:
+        url = (
+            f"{API_URL}/announcement/external"
+            f"?page={strona}&size={ROZMIAR_STRONY}&sort=creationTimestamp,desc"
+        )
+        filtr = {"sectionId": SEKCJA_RUCHOMOSCI, "categoryId": KATEGORIA_POJAZDY}
+        odp = SESJA.post(url, json=filtr, timeout=30)
+        odp.raise_for_status()
+        dane = odp.json()
+        wszystkie.extend(dane.get("content", []))
+        laczna_liczba_stron = dane.get("totalPages", 1)
+        print(
+            f"   📄 Strona {strona + 1}/{laczna_liczba_stron} – "
+            f"łącznie {dane.get('totalElements')} ogłoszeń w kategorii Pojazdy"
+        )
+        strona += 1
+        if strona >= laczna_liczba_stron or not dane.get("content"):
+            break
+        time.sleep(1)
+    return wszystkie
+
+
+def utc_na_polski_czas(tekst_utc):
+    """'2026-12-09T09:00:00Z' -> '2026-12-09 10:00' (czas polski)."""
+    if not tekst_utc:
+        return None
+    try:
+        dt = datetime.fromisoformat(tekst_utc.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(STREFA_PL).strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return None
+
+
+def zbuduj_nazwe(przedmiot, parametry, tytul):
+    p = {x.get("parameterName"): x.get("parameterValue") for x in parametry}
+    czesci = [p.get("Marka"), p.get("Model")]
+    nazwa = " ".join(str(c) for c in czesci if c) or przedmiot.get("name") or tytul
+    if p.get("Rok produkcji"):
+        nazwa += f" ({p['Rok produkcji']})"
+    if p.get("Przebieg"):
+        try:
+            km = int(float(p["Przebieg"]))
+            if km > 0:
+                nazwa += ", " + f"{km:,}".replace(",", " ") + " km"
+        except (TypeError, ValueError):
+            pass
+    return nazwa
+
+
+def uruchom_bota():
     print("\n" + "=" * 60)
-    print("🚀 ROZPOCZYNAM DZIAŁANIE BOTA (Nowe API Gemini)")
+    print("🚀 ROZPOCZYNAM DZIAŁANIE BOTA (portal eLicytacje KAS)")
     print("=" * 60)
 
-    headers = {"User-Agent": "Mozilla/5.0"}
     odwiedzone_linki = wczytaj_historie()
 
-    print(f"🌐 Pobieram stronę główną: {URL_GLOWNE} ...")
+    print("🌐 Pobieram listę pojazdów z elicytacje.mf.gov.pl ...")
     try:
-        odpowiedz = requests.get(URL_GLOWNE, headers=headers, timeout=15)
-        soup = BeautifulSoup(odpowiedz.text, "html.parser")
-        print("✅ Pobrano stronę główną pomyślnie.")
+        ogloszenia = pobierz_liste_pojazdow()
     except Exception as e:
-        print(f"❌ Błąd połączenia ze stroną główną: {e}")
+        print(f"❌ Błąd pobierania listy ogłoszeń: {e}")
         return
 
-    linki_zrodlowe = soup.find_all(
-        "a", string=re.compile("Zobacz zrodlo|Zobacz źródło", re.IGNORECASE)
+    aktywne = [o for o in ogloszenia if o.get("electronicStateCode") in AKTYWNE_STANY]
+    print(
+        f"📌 Pobrano {len(ogloszenia)} ogłoszeń, z czego {len(aktywne)} aktywnych "
+        f"(oczekujące / w toku)."
     )
 
-    liczba_ofert = len(linki_zrodlowe)
-    print(f"📌 Znaleziono ogólnie {liczba_ofert} linków do licytacji na stronie.")
     znalezione_dzisiaj = []
-
-    for index, link_tag in enumerate(linki_zrodlowe, start=1):
-        link = link_tag["href"]
+    for index, ogl in enumerate(aktywne, start=1):
+        uuid = ogl["uuid"]
+        link = f"{BASE_URL}/announcements/{uuid}"
 
         if link in odwiedzone_linki:
-            print(
-                f"[{index}/{liczba_ofert}] ⏭️ Pomijam już wcześniej odwiedzony link: {link}"
-            )
             continue
 
-        print(f"\n[{index}/{liczba_ofert}] 🔍 Sprawdzam nowe obwieszczenie: {link}")
-        lista_pojazdow_z_ai = []
-
+        print(f"\n[{index}/{len(aktywne)}] 🔍 Nowe ogłoszenie: {ogl.get('title')} – {link}")
         try:
-            print("   📥 Pobieram zawartość strony urzędu...")
-            odp_urzad = requests.get(link, headers=headers, timeout=15)
-            content_type = odp_urzad.headers.get("Content-Type", "").lower()
+            szczegoly = api_get(f"/announcements/{uuid}")
+            item_id = szczegoly["announcement"]["itemId"]
+            item = api_get(f"/items/{item_id}")
+            przedmiot = item.get("item", {})
+            parametry = item.get("parameters", []) or []
 
-            if (
-                "application/pdf" in content_type
-                or link.lower().endswith(".pdf")
-                or odp_urzad.content.startswith(b"%PDF")
-            ):
-                print("   📄 Wykryto bezpośredni link do PDF! Uruchamiam analizę...")
-                wstepne_wyniki = przeanalizuj_pdf_z_ai(odp_urzad.content)
-                lista_pojazdow_z_ai = [
-                    p
-                    for p in wstepne_wyniki
-                    if p.get("szacunkowa") and p.get("wywolawcza")
-                ]
+            wywolawcza = ogl.get("startingPrice") or szczegoly["announcement"].get(
+                "startingPrice"
+            )
+            # Cena wywołania na portalu jest brutto ("Zawiera VAT"), więc porównujemy z brutto
+            szacunkowa = przedmiot.get("estimatedValueGross") or przedmiot.get(
+                "estimatedValueNet"
+            )
+            grupa = szczegoly["announcement"].get("announcementTypeGroupCode") or ""
+            wolna_reka = grupa.startswith("SPR") or any(
+                k.startswith("SPR") for k in ogl.get("announcementTypeCodes", [])
+            )
+            nazwa = zbuduj_nazwe(przedmiot, parametry, ogl.get("title"))
+            adres = (szczegoly.get("item") or {}).get("localizationAddress") or {}
+            miasto = adres.get("city") or ogl.get("localization")
+            data_licytacji = utc_na_polski_czas(ogl.get("saleBeginDateTime"))
 
-            elif "wordprocessingml" in content_type or link.lower().endswith(".docx"):
-                print("   📝 Wykryto bezpośredni link do DOCX! Wyciągam tekst...")
-                tekst_docx = wyciagnij_tekst_z_docx(odp_urzad.content)
-                wstepne_wyniki = zapytaj_ai_o_ceny_z_tekstu(tekst_docx)
-                lista_pojazdow_z_ai = [
-                    p
-                    for p in wstepne_wyniki
-                    if p.get("szacunkowa") and p.get("wywolawcza")
-                ]
-
+            if wywolawcza and szacunkowa:
+                procent = (float(wywolawcza) / float(szacunkowa)) * 100
+            elif wolna_reka and wywolawcza:
+                szacunkowa = wywolawcza
+                procent = 100.0
             else:
-                soup_urzad = BeautifulSoup(odp_urzad.text, "html.parser")
-                tekst_strony = soup_urzad.get_text(separator=" ", strip=True)
-                print(
-                    "   🌐 Pobrano czysty HTML strony. Szukam danych bez załączników..."
-                )
-                wstepne_wyniki = zapytaj_ai_o_ceny_z_tekstu(tekst_strony)
-
-                lista_pojazdow_z_ai = [
-                    p
-                    for p in wstepne_wyniki
-                    if p.get("szacunkowa") and p.get("wywolawcza")
-                ]
-
-                if not lista_pojazdow_z_ai:
-                    print(
-                        "   🔎 Brak kompletnych kwot w treści HTML. Szukam plików do pobrania (załączników)..."
-                    )
-                    linki_pliki = []
-
-                    for a_tag in soup_urzad.find_all("a", href=True):
-                        href_maly = a_tag["href"].lower()
-                        tekst_maly = a_tag.get_text().lower()
-
-                        if (
-                            ".pdf" in href_maly
-                            or ".pdf" in tekst_maly
-                            or ".docx" in href_maly
-                            or ".docx" in tekst_maly
-                            or "/pobierz/" in href_maly
-                            or "download" in href_maly
-                            or "/c/document_library/" in href_maly
-                            or "get_file" in href_maly
-                            or "uuid=" in href_maly
-                            or "załącznik" in tekst_maly
-                            or "zawiadomienie" in tekst_maly
-                            or "obwieszczenie" in tekst_maly
-                        ):
-                            if a_tag not in linki_pliki:
-                                linki_pliki.append(a_tag)
-
-                    if linki_pliki:
-                        print(
-                            f"   📎 Znaleziono {len(linki_pliki)} potencjalnych załączników na stronie."
-                        )
-                        for nr_pliku, a_tag in enumerate(linki_pliki, start=1):
-                            plik_url = urljoin(link, a_tag["href"])
-                            print(
-                                f"      ➡️ Pobieram załącznik [{nr_pliku}/{len(linki_pliki)}]: {plik_url}"
-                            )
-
-                            odp_plik = requests.get(
-                                plik_url, headers=headers, timeout=15
-                            )
-                            typ_pliku = odp_plik.headers.get("Content-Type", "").lower()
-
-                            if (
-                                "wordprocessingml" in typ_pliku
-                                or plik_url.lower().endswith(".docx")
-                            ):
-                                tekst_docx = wyciagnij_tekst_z_docx(odp_plik.content)
-                                wynik_ai = zapytaj_ai_o_ceny_z_tekstu(tekst_docx)
-
-                            elif (
-                                "pdf" in typ_pliku
-                                or "octet-stream" in typ_pliku
-                                or odp_plik.content.startswith(b"%PDF")
-                            ):
-                                wynik_ai = przeanalizuj_pdf_z_ai(odp_plik.content)
-
-                            else:
-                                print(
-                                    f"      ⚠️ Pomijam plik (to nie PDF ani DOCX): {typ_pliku}"
-                                )
-                                continue
-
-                            if wynik_ai:
-                                znalezione_w_pliku = [
-                                    p
-                                    for p in wynik_ai
-                                    if p.get("szacunkowa") and p.get("wywolawcza")
-                                ]
-                                if znalezione_w_pliku:
-                                    lista_pojazdow_z_ai.extend(znalezione_w_pliku)
-                                    print(
-                                        f"      🟢 BINGO! AI znalazło {len(znalezione_w_pliku)} pojazd(ów) z cenami w tym pliku!"
-                                    )
-                                    break
-                    else:
-                        print(
-                            "   🤷 Brak jakichkolwiek obiecujących załączników do pobrania."
-                        )
+                procent = None
 
             print(
-                f"   📊 Podsumowanie AI dla linku: {len(lista_pojazdow_z_ai)} kompletnych pojazdów."
+                f"      🚗 {nazwa}: Wartość: {szacunkowa} zł, Wywoławcza: {wywolawcza} zł "
+                f"({f'{procent:.0f}%' if procent is not None else '?'}) | "
+                f"Wolna ręka: {wolna_reka} | Data: {data_licytacji} | {miasto}"
             )
-            for pojazd in lista_pojazdow_z_ai:
-                szacunkowa = pojazd.get("szacunkowa")
-                wywolawcza = pojazd.get("wywolawcza")
-                nazwa = pojazd.get("nazwa")
-                miasto = pojazd.get("miasto")
-                wolna_reka = pojazd.get("wolna_reka", False)
-                data_licytacji = pojazd.get("data_licytacji")
 
-                if szacunkowa and wywolawcza:
-                    procent = (wywolawcza / szacunkowa) * 100
-                    # Zwykły print informacyjny, bez dystansu
-                    print(
-                        f"      🚗 {nazwa}: Wartość: {szacunkowa} zł, Wywoławcza: {wywolawcza} zł ({procent:.0f}%) | Wolna ręka: {wolna_reka} | Data: {data_licytacji}"
-                    )
+            if procent is not None and (procent <= PROG_OKAZJI or wolna_reka):
+                print(f"      🔥 TO OKAZJA! Liczę dystans z miasta {miasto} do Krakowa...")
+                dystans = get_distance_to_krakow(miasto)
+                zapisz_okazje(
+                    link, szacunkowa, wywolawcza, procent, nazwa, miasto,
+                    dystans, wolna_reka, data_licytacji,
+                )
+                znalezione_dzisiaj.append(
+                    {
+                        "link": link,
+                        "szacunkowa": szacunkowa,
+                        "wywolawcza": wywolawcza,
+                        "procent": f"{procent:.0f}",
+                        "nazwa": nazwa,
+                        "miasto": miasto,
+                        "dystans": dystans,
+                        "wolna_reka": wolna_reka,
+                        "data_licytacji": data_licytacji,
+                    }
+                )
 
-                    # NAJPIERW sprawdzamy czy to okazja!
-                    if procent <= 50.0 or wolna_reka:
-                        print(
-                            f"      🔥 TO OKAZJA! Liczę dystans z miasta {miasto} do Krakowa..."
-                        )
-                        # DOPiero tutaj liczymy dystans
-                        dystans = get_distance_to_krakow(miasto)
-
-                        zapisz_okazje(
-                            link,
-                            szacunkowa,
-                            wywolawcza,
-                            procent,
-                            nazwa,
-                            miasto,
-                            dystans,
-                            wolna_reka,
-                            data_licytacji,
-                        )
-
-                        znalezione_dzisiaj.append(
-                            {
-                                "link": link,
-                                "szacunkowa": szacunkowa,
-                                "wywolawcza": wywolawcza,
-                                "procent": f"{procent:.0f}",
-                                "nazwa": nazwa,
-                                "miasto": miasto,
-                                "dystans": dystans,
-                                "wolna_reka": wolna_reka,
-                                "data_licytacji": data_licytacji,
-                            }
-                        )
-                else:
-                    print(
-                        f"      🤷 Znaleziono obiekt {nazwa}, ale AI zgubiło którąś kwotę (null)."
-                    )
-
-            print(f"✅ Oznaczam link jako odwiedzony.")
             zapisz_do_historii(link)
             odwiedzone_linki.add(link)
-
-            print("   ⏱️ Zabezpieczenie przed limitami: Czekam 5 sekund...")
-            time.sleep(5)
+            time.sleep(0.5)  # nie zasypujemy serwera zapytaniami
 
         except Exception as e:
-            print(
-                f"   🛑 BŁĄD KRYTYCZNY przy przetwarzaniu tego konkretnego ogłoszenia: {e}"
-            )
+            print(f"   🛑 Błąd przy przetwarzaniu ogłoszenia {link}: {e}")
 
     print("\n" + "=" * 60)
     print("🏁 ETAP POBIERANIA ZAKOŃCZONY")
-    if len(znalezione_dzisiaj) > 0:
-        print(
-            f"🎉 Znalazłem dzisiaj {len(znalezione_dzisiaj)} okazji! Wysyłam raport..."
-        )
+    if znalezione_dzisiaj:
+        print(f"🎉 Znalazłem dzisiaj {len(znalezione_dzisiaj)} okazji! Wysyłam raport...")
         wyslij_email(znalezione_dzisiaj)
     else:
-        print(
-            "🤷‍♂️ Dzisiaj nie znaleziono żadnych nowych okazji. Wysyłam e-mail z pustym raportem..."
-        )
+        print("🤷‍♂️ Brak nowych okazji. Wysyłam e-mail z pustym raportem...")
         wyslij_email_brak_okazji()
 
 
