@@ -483,4 +483,4 @@ def uruchom_bota():
 
 
 if __name__ == "__main__":
-    uruchom_bota()ž
+    uruchom_bota()
