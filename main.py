@@ -40,10 +40,10 @@ ROZMIAR_STRONY = 200
 # Porównujemy AKTUALNĄ cenę (cena wywołania albo najwyższa oferta, jeśli licytacja
 # trwa) z urzędową wartością szacunkową brutto.
 # Uwaga: z mocy prawa I licytacja startuje od 75%, a II od 50% tej wartości,
-# więc w praktyce próg 50% łapie II licytacje (dopóki nikt nie przebił)
-# oraz tańsze sprzedaże z wolnej ręki.
-PROG_OKAZJI = 50.0  # aktualna cena <= tylu % wartości szacunkowej
-ZAWSZE_WOLNA_REKA = True  # sprzedaż z wolnej ręki traktuj zawsze jako okazję
+# a wolna ręka zwykle mieści się w 10–40%.
+PROG_LICYTACJA = 50.0  # II licytacje, dopóki cena nie przekroczy połowy wartości
+PROG_WOLNA_REKA = 40.0  # wolna ręka tylko wyraźnie poniżej wartości
+MIN_WARTOSC = 3000  # pomijamy drobnicę (motorowery, złom) – dojazd zjadłby zysk
 
 PLIK_WYNIKOW = "okazje_licytacje.csv"
 PLIK_HISTORII = "historia_linkow.txt"
@@ -329,8 +329,8 @@ def wyslij_email(lista_znalezionych):
     teraz = datetime.now(STREFA_PL).replace(tzinfo=None)
 
     tresc = (
-        f"<h3>Dzisiejsze okazje (≤ {PROG_OKAZJI:.0f}% wartości szacunkowej"
-        f"{' lub z wolnej ręki' if ZAWSZE_WOLNA_REKA else ''}):</h3><ul>"
+        f"<h3>Dzisiejsze okazje (licytacje ≤ {PROG_LICYTACJA:.0f}%, wolna ręka "
+        f"≤ {PROG_WOLNA_REKA:.0f}% wartości szacunkowej, wartość od {zl(MIN_WARTOSC)}):</h3><ul>"
     )
     for okazja in lista_znalezionych:
         dystans_str = (
@@ -405,8 +405,8 @@ def wyslij_email_brak_okazji():
     <h3>Cześć!</h3>
     <p>Dzisiejszy przegląd portalu eLicytacje KAS został zakończony.</p>
     <p>Niestety, <b>nie znalazłem dzisiaj żadnych nowych ofert</b> pojazdów, które spełniałyby
-    Twoje kryteria (cena ≤ {PROG_OKAZJI:.0f}% wartości szacunkowej
-    {'lub sprzedaż z wolnej ręki' if ZAWSZE_WOLNA_REKA else ''}).</p>
+    Twoje kryteria (licytacje ≤ {PROG_LICYTACJA:.0f}%, wolna ręka ≤ {PROG_WOLNA_REKA:.0f}%
+    wartości szacunkowej, wartość od {zl(MIN_WARTOSC)}).</p>
     <p>Jutro rano znów sprawdzę portal i dam Ci znać, jeśli pojawi się coś interesującego.</p>
     <br><small>Wiadomość wygenerowana automatycznie przez Twojego bota 🤖</small>
     """
@@ -450,9 +450,6 @@ def uruchom_bota():
 
         if p["szacunkowa"] and p["aktualna_cena"]:
             p["procent"] = p["aktualna_cena"] / float(p["szacunkowa"]) * 100
-        elif p["wolna_reka"] and p["aktualna_cena"]:
-            p["szacunkowa"] = p["aktualna_cena"]
-            p["procent"] = 100.0
         else:
             p["procent"] = None
 
@@ -462,7 +459,8 @@ def uruchom_bota():
                 f"wartość {zl(p['szacunkowa'])} ({p['procent']:.0f}%) | "
                 f"{'wolna ręka' if p['wolna_reka'] else p['typ_licytacji']} | {p['miasto']}"
             )
-            if p["procent"] <= PROG_OKAZJI or (p["wolna_reka"] and ZAWSZE_WOLNA_REKA):
+            prog = PROG_WOLNA_REKA if p["wolna_reka"] else PROG_LICYTACJA
+            if p["procent"] <= prog and float(p["szacunkowa"]) >= MIN_WARTOSC:
                 print("      🔥 TO OKAZJA! Liczę dystans do Krakowa...")
                 p["dystans"] = get_distance_to_krakow(p["miasto"])
                 zapisz_okazje(p)
@@ -485,4 +483,4 @@ def uruchom_bota():
 
 
 if __name__ == "__main__":
-    uruchom_bota()
+    uruchom_bota()ž
