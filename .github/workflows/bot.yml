@@ -2,7 +2,9 @@ name: Codzienny Bot Skarbowy
 
 on:
   schedule:
-    - cron: "0 6 * * *" # 07:00 UTC, czyli 08:00 lub 09:00 rano w Polsce
+    # Minuta inna niż :00 – o pełnych godzinach GitHub jest przeciążony
+    # i potrafi opóźniać albo pomijać zaplanowane uruchomienia.
+    - cron: "37 4 * * *" # 04:37 UTC, czyli 05:37 (zima) / 06:37 (lato) w Polsce
   workflow_dispatch: # Pozwala odpalać skrypt ręcznie z GitHuba
 
 permissions:
@@ -11,6 +13,7 @@ permissions:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Pobieranie repozytorium
         uses: actions/checkout@v4
@@ -31,6 +34,7 @@ jobs:
         run: python main.py
 
       - name: Zapisywanie historii linków
+        if: always()
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
