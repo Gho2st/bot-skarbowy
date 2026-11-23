@@ -1,5 +1,6 @@
 import requests
 import os
+import sys
 import csv
 import time
 import math
@@ -196,9 +197,17 @@ def pobierz_liste_pojazdow():
             f"?page={strona}&size={ROZMIAR_STRONY}&sort=creationTimestamp,desc"
         )
         filtr = {"sectionId": SEKCJA_RUCHOMOSCI, "categoryId": KATEGORIA_POJAZDY}
-        odp = SESJA.post(url, json=filtr, timeout=30)
-        odp.raise_for_status()
-        dane = odp.json()
+        for proba in range(1, 4):
+            try:
+                odp = SESJA.post(url, json=filtr, timeout=30)
+                odp.raise_for_status()
+                dane = odp.json()
+                break
+            except Exception as e:
+                if proba == 3:
+                    raise
+                print(f"   ⚠️ Próba {proba}/3 nieudana ({e}). Ponawiam za 30 s...")
+                time.sleep(30)
         wszystkie.extend(dane.get("content", []))
         laczna_liczba_stron = dane.get("totalPages", 1)
         print(
@@ -413,6 +422,18 @@ def wyslij_email_brak_okazji():
     wyslij_wiadomosc("ℹ️ Bot Skarbowy: Brak nowych okazji na dziś", tresc)
 
 
+def wyslij_email_blad(opis):
+    if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVERS:
+        return
+    tresc = f"""
+    <h3>⚠️ Bot Skarbowy nie zadziałał</h3>
+    <p>{escape(opis)}</p>
+    <p>Szczegóły w zakładce Actions w repozytorium. Najczęstsze przyczyny: chwilowa
+    awaria portalu eLicytacje KAS albo zmiana jego API.</p>
+    """
+    wyslij_wiadomosc("⚠️ Bot Skarbowy: błąd uruchomienia", tresc)
+
+
 # ---------------------------------------------------------------------------
 # Główna pętla
 # ---------------------------------------------------------------------------
@@ -431,7 +452,8 @@ def uruchom_bota():
         ogloszenia = pobierz_liste_pojazdow()
     except Exception as e:
         print(f"❌ Błąd pobierania listy ogłoszeń: {e}")
-        return
+        wyslij_email_blad(f"Nie udało się pobrać listy ogłoszeń z portalu: {e}")
+        sys.exit(1)  # czerwony status w GitHub Actions + powiadomienie od GitHuba
 
     aktywne = [o for o in ogloszenia if o.get("electronicStateCode") in AKTYWNE_STANY]
     nowe = [o for o in aktywne if f"{BASE_URL}/announcements/{o['uuid']}" not in odwiedzone_linki]
